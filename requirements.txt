@@ -1,2 +1,6 @@
 astroquery
 astropy
+numpy
+pandas
+matplotlib
+tqdm
