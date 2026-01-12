@@ -1,7 +1,4 @@
-# datasets
-*.fits
-*.fit
-*.fz
-*.npy
 __pycache__/
 .venv/
+.idea/
+
