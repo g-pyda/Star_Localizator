@@ -1,0 +1,19 @@
+{
+  "image_id": "star68_run7713_cam2_frame232_r_p128",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    128,
+    128
+  ],
+  "objects": [
+    {
+      "star_id": 68,
+      "ra_deg": 0.2004,
+      "dec_deg": 16.988197,
+      "x": 63.94029813850784,
+      "y": 64.09617357267689,
+      "mag": 8.79
+    }
+  ]
+}

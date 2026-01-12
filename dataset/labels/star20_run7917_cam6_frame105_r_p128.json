@@ -1,0 +1,19 @@
+{
+  "image_id": "star20_run7917_cam6_frame105_r_p128",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    128,
+    128
+  ],
+  "objects": [
+    {
+      "star_id": 20,
+      "ra_deg": 0.063045,
+      "dec_deg": 23.529228,
+      "x": 64.06752405030579,
+      "y": 64.38339081524316,
+      "mag": 8.51
+    }
+  ]
+}

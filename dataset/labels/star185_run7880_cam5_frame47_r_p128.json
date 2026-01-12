@@ -1,0 +1,19 @@
+{
+  "image_id": "star185_run7880_cam5_frame47_r_p128",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    128,
+    128
+  ],
+  "objects": [
+    {
+      "star_id": 185,
+      "ra_deg": 0.59004,
+      "dec_deg": 10.785363,
+      "x": 64.21331417853298,
+      "y": 64.00604811695911,
+      "mag": 8.53
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "image_id": "star362_run5064_cam5_frame157_r_p128",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    128,
+    128
+  ],
+  "objects": [
+    {
+      "star_id": 362,
+      "ra_deg": 1.15062,
+      "dec_deg": -19.437893,
+      "x": 64.04515148792677,
+      "y": 63.55180468814069,
+      "mag": 9.18
+    }
+  ]
+}

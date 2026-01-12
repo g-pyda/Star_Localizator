@@ -1,0 +1,19 @@
+{
+  "image_id": "star210_run8100_cam1_frame324_r_p128",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    128,
+    128
+  ],
+  "objects": [
+    {
+      "star_id": 210,
+      "ra_deg": 0.662145,
+      "dec_deg": -8.487955,
+      "x": 64.38834984254083,
+      "y": 64.1711879244732,
+      "mag": 9.05
+    }
+  ]
+}
