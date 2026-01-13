@@ -241,6 +241,15 @@ def main():
                 px, py = pxy
 
                 image_id = f"star{star.id}_run{run}_cam{camcol}_frame{frame}_{BAND}_p{PATCH_SIZE}"
+
+                label_path = LABELS_DIR / f"{image_id}.json"
+                if label_path.exists():
+                    continue
+
+                image_path = IMAGES_DIR / f"{image_id}.npy"
+                if image_path.exists():
+                    continue
+
                 label = {
                     "image_id": image_id,
                     "source": "SDSS",
