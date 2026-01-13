@@ -1,0 +1,19 @@
+{
+  "image_id": "star415_run7784_cam2_frame205_r_p128",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    128,
+    128
+  ],
+  "objects": [
+    {
+      "star_id": 415,
+      "ra_deg": 1.263825,
+      "dec_deg": 9.279961,
+      "x": 64.14530476068353,
+      "y": 63.95337773732797,
+      "mag": 8.94
+    }
+  ]
+}

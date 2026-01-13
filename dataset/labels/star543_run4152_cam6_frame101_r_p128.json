@@ -1,0 +1,19 @@
+{
+  "image_id": "star543_run4152_cam6_frame101_r_p128",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    128,
+    128
+  ],
+  "objects": [
+    {
+      "star_id": 543,
+      "ra_deg": 1.653135,
+      "dec_deg": 29.021502,
+      "x": 63.56438801942966,
+      "y": 64.4703658784706,
+      "mag": 6.07
+    }
+  ]
+}
