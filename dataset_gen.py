@@ -1,19 +1,19 @@
 import json
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
-import hashlib
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from astroquery.sdss import SDSS
+from astroquery.gaia import Gaia
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astropy.wcs import WCS
 from astropy.utils.data import conf as astropy_conf
 astropy_conf.use_download_cache = True
-
 
 
 # =======================
@@ -31,11 +31,9 @@ BAND = "r"
 # Run controls
 SKIP_SUN = True
 
-# Stop conditions:
-# - MAX_SAVED_FRAMES limits how many unique frames are stored (good for testing)
-# - MAX_ATTEMPTS limits how many stars from the catalog are tried per run
-MAX_SAVED_FRAMES = 300     # set None for unlimited
-MAX_ATTEMPTS = 3000        # set None for unlimited
+# Stop conditions
+MAX_SAVED_FRAMES = 300   # set None for unlimited
+MAX_ATTEMPTS = 3000      # set None for unlimited
 
 # SDSS query controls
 MAX_XID = 10
@@ -44,24 +42,32 @@ MIN_ARCMIN = 0.2
 MAX_ITERS = 60
 
 # Network robustness
-REMOTE_TIMEOUT_SECONDS = 60  # astropy download timeout; increase if needed
+REMOTE_TIMEOUT_SECONDS = 90  # download timeout for SDSS frames
 
-# Labeling rules
-# When adding a star to a frame, skip if same star_id already exists in that frame label
-SKIP_DUPLICATE_STAR_ID = True
+# =======================
+# Gaia DR3 labeling (gradual switch)
+# =======================
+USE_GAIA_LABELS = True            # enable Gaia labeling
+KEEP_HYG_LABELS = False           # keep HYG labels too (usually False once Gaia works)
+GAIA_ROW_LIMIT = 2000             # max Gaia sources per frame
+GAIA_RADIUS_MARGIN_FACTOR = 1.05  # slightly enlarge search radius
+GAIA_MAG_LIMIT = 19.0             # None = no filter; typical 18-20 to limit size/time
+
+# Dedupe precision for non-Gaia objects (catalog + RA/Dec rounded)
+DEDUP_ROUND_DEG = 6  # 1e-6 deg ~ 0.0036 arcsec
 
 
 # =======================
 # Utility functions
 # =======================
-def ensure_dirs():
+def ensure_dirs() -> None:
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     LABELS_DIR.mkdir(parents=True, exist_ok=True)
     SPLITS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def calculate_dynamic_radius(mag: float) -> float:
-    """Returns a radius in arcminutes based on star brightness."""
+    """Returns an SDSS query radius in arcminutes based on star brightness."""
     if mag < 1.0:
         return 60.0
     elif mag < 3.0:
@@ -82,7 +88,7 @@ def query_sdss_near(ra_deg: float, dec_deg: float, radius_arcmin: float):
 
 
 def find_reasonable_matches(ra_deg: float, dec_deg: float, mag: float):
-    """Find a nearby SDSS object match list with size between 1 and MAX_XID if possible."""
+    """Find an SDSS match list with size between 1 and MAX_XID if possible."""
     radius = calculate_dynamic_radius(mag)
     xid = None
 
@@ -113,9 +119,7 @@ def find_reasonable_matches(ra_deg: float, dec_deg: float, mag: float):
 
 
 def dedupe_images(images):
-    """
-    Deduplicate within a single SDSS.get_images() result by (RUN, CAMCOL, FRAME).
-    """
+    """Deduplicate SDSS.get_images() results by (RUN, CAMCOL, FRAME)."""
     reduced = {}
     for hdul in images:
         hdu0 = hdul[0]
@@ -134,23 +138,6 @@ def world_to_pixel(wcs: WCS, ra_deg: float, dec_deg: float) -> Tuple[float, floa
     coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame="icrs")
     x, y = wcs.world_to_pixel(coord)
     return float(x), float(y)
-
-
-def frame_radec_bounds(wcs: WCS, width: int, height: int) -> Tuple[float, float, float, float]:
-    """
-    Approximate RA/Dec bounds of the frame using the four image corners.
-    Returns (ra_min, ra_max, dec_min, dec_max) in degrees.
-
-    Note: RA wrap-around (near 0/360) is not handled in this simple version.
-    """
-    xs = np.array([0, width - 1, 0, width - 1], dtype=float)
-    ys = np.array([0, 0, height - 1, height - 1], dtype=float)
-
-    sky = wcs.pixel_to_world(xs, ys)  # SkyCoord array
-    ra = sky.ra.deg
-    dec = sky.dec.deg
-
-    return float(np.min(ra)), float(np.max(ra)), float(np.min(dec)), float(np.max(dec))
 
 
 def frame_id(run: int, camcol: int, frame: int, band: str) -> str:
@@ -174,35 +161,65 @@ def save_label(path: Path, label: Dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def _rounded_key(obj: Dict[str, Any]) -> Optional[Tuple[Any, ...]]:
+    """
+    Generic dedupe key for objects without stable IDs:
+    (catalog, rounded_ra, rounded_dec)
+    """
+    cat = obj.get("catalog")
+    ra = obj.get("ra_deg")
+    dec = obj.get("dec_deg")
+    if cat is None or ra is None or dec is None:
+        return None
+    try:
+        return (
+            cat,
+            round(float(ra), DEDUP_ROUND_DEG),
+            round(float(dec), DEDUP_ROUND_DEG),
+        )
+    except Exception:
+        return None
+
+
 def add_object_to_label(label: Dict[str, Any], obj: Dict[str, Any]) -> bool:
     """
-    Append an object to label["objects"] unless already present (by star_id if configured).
-    Returns True if added, False if skipped.
+    Append an object to label["objects"] unless already present.
+    Dedupe rules:
+    - Gaia: (catalog="gaia_dr3", source_id)
+    - Otherwise: (catalog, rounded ra/dec)
+    Returns True if appended, False if skipped.
     """
     objs = label.setdefault("objects", [])
 
-    if SKIP_DUPLICATE_STAR_ID and "star_id" in obj:
-        sid = obj["star_id"]
+    # Dedupe Gaia by stable source_id
+    if obj.get("catalog") == "gaia_dr3" and obj.get("source_id") is not None:
+        gid = obj["source_id"]
         for existing in objs:
-            if existing.get("star_id") == sid:
+            if existing.get("catalog") == "gaia_dr3" and existing.get("source_id") == gid:
+                return False
+        objs.append(obj)
+        return True
+
+    # Fallback dedupe by rounded (catalog, ra, dec)
+    k = _rounded_key(obj)
+    if k is not None:
+        for existing in objs:
+            ek = _rounded_key(existing)
+            if ek == k:
                 return False
 
     objs.append(obj)
     return True
 
 
-def write_splits_from_labels():
-    """
-    Deterministic train/val split based on frame_id hash.
-    Uses all labels on disk, so it works even after crashes.
-    """
+def write_splits_from_labels() -> None:
+    """Deterministic train/val split based on frame_id hash. Uses labels on disk."""
     label_files = sorted(LABELS_DIR.glob("*.json"))
     train_ids = []
     val_ids = []
 
     for p in label_files:
         fid = p.stem
-        # Deterministic split: simple hash modulo
         h = int(hashlib.md5(fid.encode("utf-8")).hexdigest(), 16) % 10
         if h == 0:
             val_ids.append(fid)
@@ -211,8 +228,45 @@ def write_splits_from_labels():
 
     (SPLITS_DIR / "train.txt").write_text("\n".join(train_ids) + "\n", encoding="utf-8")
     (SPLITS_DIR / "val.txt").write_text("\n".join(val_ids) + "\n", encoding="utf-8")
-
     print(f"Splits written from disk: train={len(train_ids)} val={len(val_ids)} total={len(label_files)}")
+
+
+def gaia_sources_for_frame(wcs: WCS, width: int, height: int):
+    """
+    Query Gaia DR3 sources for an approximate cone covering the SDSS frame.
+    Returns an astropy Table (or None on failure).
+    """
+    # Frame center
+    center = wcs.pixel_to_world(width / 2.0, height / 2.0)
+    ra_c = float(center.ra.deg)
+    dec_c = float(center.dec.deg)
+
+    # Approximate half-diagonal radius (SDSS pixel scale ~0.396 arcsec/pixel)
+    pix_scale_deg = 0.396 / 3600.0
+    half_diag_pix = 0.5 * float((width**2 + height**2) ** 0.5)
+    radius_deg = GAIA_RADIUS_MARGIN_FACTOR * half_diag_pix * pix_scale_deg
+
+    # Control result size
+    Gaia.ROW_LIMIT = GAIA_ROW_LIMIT
+
+    coord = SkyCoord(ra=ra_c * u.deg, dec=dec_c * u.deg, frame="icrs")
+    try:
+        job = Gaia.cone_search_async(coord, radius=radius_deg * u.deg)
+        tbl = job.get_results()
+    except Exception:
+        return None
+
+    if tbl is None:
+        return None
+
+    # Optional magnitude filter (Gaia G)
+    if GAIA_MAG_LIMIT is not None and "phot_g_mean_mag" in tbl.colnames:
+        try:
+            tbl = tbl[tbl["phot_g_mean_mag"] <= GAIA_MAG_LIMIT]
+        except Exception:
+            pass
+
+    return tbl
 
 
 # =======================
@@ -222,20 +276,26 @@ def main():
     ensure_dirs()
     astropy_conf.remote_timeout = REMOTE_TIMEOUT_SECONDS
 
-    # Load HYG catalog once
-    star_df = pd.read_csv(CATALOG_PATH)
-
-    # Precompute degrees for fast filtering (frame-centric labeling)
-    star_df["ra_deg"] = star_df["ra"].astype(float) * 15.0
-    star_df["dec_deg"] = star_df["dec"].astype(float)
+    # Load HYG catalog once (only needed if KEEP_HYG_LABELS=True)
+    star_df = None
+    if KEEP_HYG_LABELS:
+        star_df = pd.read_csv(CATALOG_PATH)
+        star_df["ra_deg"] = star_df["ra"].astype(float) * 15.0
+        star_df["dec_deg"] = star_df["dec"].astype(float)
 
     # Track existing frames (labels already on disk)
-    existing_labels = {p.stem for p in LABELS_DIR.glob("*.json")}
-    saved_frames = set(existing_labels)
+    saved_frames = {p.stem for p in LABELS_DIR.glob("*.json")}
 
     attempts = 0
 
-    for star in tqdm(star_df.itertuples(index=False), total=len(star_df)):
+    # If we are not using HYG at all, we still need "attempts" to drive SDSS frame discovery.
+    # We can reuse HYG catalog as a convenient list of sky positions to probe SDSS.
+    # So we still read it for iteration, but we won't label with star_id.
+    probe_df = pd.read_csv(CATALOG_PATH)
+    probe_df["ra_deg"] = probe_df["ra"].astype(float) * 15.0
+    probe_df["dec_deg"] = probe_df["dec"].astype(float)
+
+    for star in tqdm(probe_df.itertuples(index=False), total=len(probe_df)):
         attempts += 1
         if MAX_ATTEMPTS is not None and attempts > MAX_ATTEMPTS:
             break
@@ -243,11 +303,9 @@ def main():
         if SKIP_SUN and int(star.id) == 0:
             continue
 
-        # Stop when enough unique frames have labels
         if MAX_SAVED_FRAMES is not None and len(saved_frames) >= MAX_SAVED_FRAMES:
             break
 
-        # HYG RA is in hours -> degrees
         ra_deg = float(star.ra_deg)
         dec_deg = float(star.dec_deg)
         mag = float(star.mag)
@@ -256,7 +314,7 @@ def main():
         if xid is None:
             continue
 
-        # Download candidate frames (can timeout)
+        # Download candidate SDSS frames (can timeout)
         try:
             images = SDSS.get_images(matches=xid, band=BAND)
         except TimeoutError:
@@ -269,14 +327,11 @@ def main():
 
         images_reduced = dedupe_images(images)
 
-        # For each SDSS frame, attach ALL HYG stars inside that frame
         for (run, camcol, frame), hdul in images_reduced.items():
-            fid = frame_id(run, camcol, frame, BAND)
-
-            # Respect max unique frames
             if MAX_SAVED_FRAMES is not None and len(saved_frames) >= MAX_SAVED_FRAMES:
                 break
 
+            fid = frame_id(run, camcol, frame, BAND)
             img_path = IMAGES_DIR / f"{fid}.npz"
             lbl_path = LABELS_DIR / f"{fid}.json"
 
@@ -311,64 +366,100 @@ def main():
                     "objects": [],
                 }
 
-            # Compute approximate RA/Dec bounds of this frame (corner-based)
-            try:
-                ra_min, ra_max, dec_min, dec_max = frame_radec_bounds(wcs, w, h)
-            except Exception:
-                continue
-
-            # Small margin in degrees to avoid edge numerical issues
-            margin = 0.05
-            ra_min -= margin
-            ra_max += margin
-            dec_min -= margin
-            dec_max += margin
-
-            # Candidate HYG stars potentially inside this frame
-            # Note: RA wrap-around near 0/360 not handled in this simple filter.
-            cands = star_df[
-                (star_df["dec_deg"] >= dec_min) & (star_df["dec_deg"] <= dec_max) &
-                (star_df["ra_deg"] >= ra_min) & (star_df["ra_deg"] <= ra_max)
-            ]
-
-            # Add all candidate stars that actually map inside pixel bounds
             changed = False
-            for row in cands.itertuples(index=False):
-                sid = int(row.id)
-                if SKIP_SUN and sid == 0:
-                    continue
 
+            # -----------------------
+            # Gaia labeling (primary)
+            # -----------------------
+            if USE_GAIA_LABELS:
+                gaia_tbl = gaia_sources_for_frame(wcs, w, h)
+                if gaia_tbl is not None and len(gaia_tbl) > 0:
+                    for row in gaia_tbl:
+                        try:
+                            ra_g = float(row["ra"])
+                            dec_g = float(row["dec"])
+                            gx, gy = world_to_pixel(wcs, ra_g, dec_g)
+                        except Exception:
+                            continue
+
+                        if not (0 <= gx < w and 0 <= gy < h):
+                            continue
+
+                        obj = {
+                            "catalog": "gaia_dr3",
+                            "source_id": int(row["source_id"]) if "source_id" in row.colnames else None,
+                            "ra_deg": ra_g,
+                            "dec_deg": dec_g,
+                            "x": float(gx),
+                            "y": float(gy),
+                            "phot_g_mean_mag": float(row["phot_g_mean_mag"]) if "phot_g_mean_mag" in row.colnames else None,
+                        }
+                        if add_object_to_label(label, obj):
+                            changed = True
+
+            # -----------------------
+            # Optional: HYG labeling (secondary / transitional)
+            # NOTE: No star_id stored (to avoid numbering); uses catalog+ra/dec dedupe.
+            # -----------------------
+            if KEEP_HYG_LABELS and star_df is not None:
+                # Use the frame corners to get bbox and filter candidates.
+                # Simple bbox with RA wrap handling.
                 try:
-                    sx, sy = world_to_pixel(wcs, float(row.ra_deg), float(row.dec_deg))
+                    xs = np.array([0, w - 1, 0, w - 1], dtype=float)
+                    ys = np.array([0, 0, h - 1, h - 1], dtype=float)
+                    sky = wcs.pixel_to_world(xs, ys)
+                    ra_vals = sky.ra.deg
+                    dec_vals = sky.dec.deg
+                    ra_min, ra_max = float(np.min(ra_vals)), float(np.max(ra_vals))
+                    dec_min, dec_max = float(np.min(dec_vals)), float(np.max(dec_vals))
                 except Exception:
-                    continue
+                    ra_min = ra_max = dec_min = dec_max = None
 
-                if not (0 <= sx < w and 0 <= sy < h):
-                    continue
+                if ra_min is not None:
+                    margin = 0.05
+                    ra_min -= margin
+                    ra_max += margin
+                    dec_min -= margin
+                    dec_max += margin
 
-                obj = {
-                    "star_id": sid,
-                    "ra_deg": float(row.ra_deg),
-                    "dec_deg": float(row.dec_deg),
-                    "x": float(sx),
-                    "y": float(sy),
-                    "mag": float(row.mag),
-                }
+                    dec_mask = (star_df["dec_deg"] >= dec_min) & (star_df["dec_deg"] <= dec_max)
+                    if ra_min <= ra_max:
+                        ra_mask = (star_df["ra_deg"] >= ra_min) & (star_df["ra_deg"] <= ra_max)
+                    else:
+                        ra_mask = (star_df["ra_deg"] >= ra_min) | (star_df["ra_deg"] <= ra_max)
 
-                # add_object_to_label should skip duplicates by star_id
-                added = add_object_to_label(label, obj)
-                if added:
-                    changed = True
+                    cands = star_df[dec_mask & ra_mask]
 
-            # Save label if anything was added/updated
+                    for row in cands.itertuples(index=False):
+                        if SKIP_SUN and int(row.id) == 0:
+                            continue
+                        try:
+                            sx, sy = world_to_pixel(wcs, float(row.ra_deg), float(row.dec_deg))
+                        except Exception:
+                            continue
+                        if not (0 <= sx < w and 0 <= sy < h):
+                            continue
+
+                        obj = {
+                            "catalog": "hyg",
+                            "ra_deg": float(row.ra_deg),
+                            "dec_deg": float(row.dec_deg),
+                            "x": float(sx),
+                            "y": float(sy),
+                            "mag": float(row.mag),
+                        }
+                        if add_object_to_label(label, obj):
+                            changed = True
+
+            # Save label if changed or new frame label
             if changed or (fid not in saved_frames):
                 save_label(lbl_path, label)
-
-            saved_frames.add(fid)
+                saved_frames.add(fid)
 
     # Always write splits from what exists on disk
     write_splits_from_labels()
     print(f"Done. Unique frames with labels: {len({p.stem for p in LABELS_DIR.glob('*.json')})}")
+
 
 if __name__ == "__main__":
     main()
