@@ -1,0 +1,19 @@
+{
+  "image_id": "run7907_cam2_frame72_r",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    1489,
+    2048
+  ],
+  "objects": [
+    {
+      "star_id": 44,
+      "ra_deg": 0.13275,
+      "dec_deg": -3.306323,
+      "x": 298.3987788374551,
+      "y": 1302.518357528485,
+      "mag": 7.91
+    }
+  ]
+}

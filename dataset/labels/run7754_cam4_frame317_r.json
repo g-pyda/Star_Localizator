@@ -1,0 +1,19 @@
+{
+  "image_id": "run7754_cam4_frame317_r",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    1489,
+    2048
+  ],
+  "objects": [
+    {
+      "star_id": 129,
+      "ra_deg": 0.41562,
+      "dec_deg": 5.372808,
+      "x": 1699.6793112483308,
+      "y": 816.830049586345,
+      "mag": 9.32
+    }
+  ]
+}

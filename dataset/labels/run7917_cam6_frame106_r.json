@@ -1,0 +1,19 @@
+{
+  "image_id": "run7917_cam6_frame106_r",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    1489,
+    2048
+  ],
+  "objects": [
+    {
+      "star_id": 67,
+      "ra_deg": 0.19932,
+      "dec_deg": 23.538219,
+      "x": 616.8944736746562,
+      "y": 710.3981143361467,
+      "mag": 7.83
+    }
+  ]
+}

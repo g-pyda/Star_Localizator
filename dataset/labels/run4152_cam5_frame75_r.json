@@ -1,0 +1,19 @@
+{
+  "image_id": "run4152_cam5_frame75_r",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    1489,
+    2048
+  ],
+  "objects": [
+    {
+      "star_id": 76,
+      "ra_deg": 0.22821,
+      "dec_deg": 32.825654,
+      "x": 877.9851767709013,
+      "y": 543.1122834339253,
+      "mag": 9.03
+    }
+  ]
+}

@@ -21,19 +21,27 @@ def main():
             lbl = json.load(f)
 
         image_id = lbl["image_id"]
-        img_path = IMAGES_DIR / f"{image_id}.npy"
+        img_path = IMAGES_DIR / f"{image_id}.npz"
         if not img_path.exists():
             print("Missing image:", img_path)
             continue
 
-        img = np.load(img_path)
-        obj = lbl["objects"][0]
-        x, y = obj["x"], obj["y"]
+        # Load image data from .npz
+        img = np.load(img_path)["data"]
 
-        plt.figure()
-        plt.imshow(img, origin="lower")
-        plt.scatter([x], [y])
+        objects = lbl.get("objects", [])
+        print(f"{image_id}: {len(objects)} stars")
+
+        plt.figure(figsize=(6, 5))
+        plt.imshow(img, origin="lower", cmap="gray")
+
+        if objects:
+            xs = [o["x"] for o in objects]
+            ys = [o["y"] for o in objects]
+            plt.scatter(xs, ys, s=20)
+
         plt.title(image_id)
+        plt.tight_layout()
         plt.show()
 
 if __name__ == "__main__":

@@ -136,6 +136,23 @@ def world_to_pixel(wcs: WCS, ra_deg: float, dec_deg: float) -> Tuple[float, floa
     return float(x), float(y)
 
 
+def frame_radec_bounds(wcs: WCS, width: int, height: int) -> Tuple[float, float, float, float]:
+    """
+    Approximate RA/Dec bounds of the frame using the four image corners.
+    Returns (ra_min, ra_max, dec_min, dec_max) in degrees.
+
+    Note: RA wrap-around (near 0/360) is not handled in this simple version.
+    """
+    xs = np.array([0, width - 1, 0, width - 1], dtype=float)
+    ys = np.array([0, 0, height - 1, height - 1], dtype=float)
+
+    sky = wcs.pixel_to_world(xs, ys)  # SkyCoord array
+    ra = sky.ra.deg
+    dec = sky.dec.deg
+
+    return float(np.min(ra)), float(np.max(ra)), float(np.min(dec)), float(np.max(dec))
+
+
 def frame_id(run: int, camcol: int, frame: int, band: str) -> str:
     return f"run{run}_cam{camcol}_frame{frame}_{band}"
 
@@ -168,7 +185,6 @@ def add_object_to_label(label: Dict[str, Any], obj: Dict[str, Any]) -> bool:
         sid = obj["star_id"]
         for existing in objs:
             if existing.get("star_id") == sid:
-                existing.update(obj)
                 return False
 
     objs.append(obj)
@@ -206,15 +222,20 @@ def main():
     ensure_dirs()
     astropy_conf.remote_timeout = REMOTE_TIMEOUT_SECONDS
 
+    # Load HYG catalog once
     star_df = pd.read_csv(CATALOG_PATH)
 
-    # Track existing frames so we can stop at MAX_SAVED_FRAMES reliably
+    # Precompute degrees for fast filtering (frame-centric labeling)
+    star_df["ra_deg"] = star_df["ra"].astype(float) * 15.0
+    star_df["dec_deg"] = star_df["dec"].astype(float)
+
+    # Track existing frames (labels already on disk)
     existing_labels = {p.stem for p in LABELS_DIR.glob("*.json")}
     saved_frames = set(existing_labels)
 
     attempts = 0
 
-    for star in tqdm(star_df.itertuples(), total=len(star_df)):
+    for star in tqdm(star_df.itertuples(index=False), total=len(star_df)):
         attempts += 1
         if MAX_ATTEMPTS is not None and attempts > MAX_ATTEMPTS:
             break
@@ -222,13 +243,13 @@ def main():
         if SKIP_SUN and int(star.id) == 0:
             continue
 
-        # Stop when we have enough unique frames saved
+        # Stop when enough unique frames have labels
         if MAX_SAVED_FRAMES is not None and len(saved_frames) >= MAX_SAVED_FRAMES:
             break
 
         # HYG RA is in hours -> degrees
-        ra_deg = float(star.ra) * 15.0
-        dec_deg = float(star.dec)
+        ra_deg = float(star.ra_deg)
+        dec_deg = float(star.dec_deg)
         mag = float(star.mag)
 
         xid, _radius = find_reasonable_matches(ra_deg, dec_deg, mag)
@@ -248,9 +269,14 @@ def main():
 
         images_reduced = dedupe_images(images)
 
-        # For each returned SDSS frame, compute star pixel and attach to that frame label
+        # For each SDSS frame, attach ALL HYG stars inside that frame
         for (run, camcol, frame), hdul in images_reduced.items():
             fid = frame_id(run, camcol, frame, BAND)
+
+            # Respect max unique frames
+            if MAX_SAVED_FRAMES is not None and len(saved_frames) >= MAX_SAVED_FRAMES:
+                break
+
             img_path = IMAGES_DIR / f"{fid}.npz"
             lbl_path = LABELS_DIR / f"{fid}.json"
 
@@ -259,20 +285,20 @@ def main():
             if data is None or not hasattr(data, "ndim") or data.ndim != 2:
                 continue
 
-            # WCS -> pixel coords for this star in this frame
+            h, w = data.shape
+
+            # Build WCS
             try:
                 wcs = WCS(hdu0.header)
-                x, y = world_to_pixel(wcs, ra_deg, dec_deg)
             except Exception:
                 continue
 
-            h, w = data.shape
-            if not (0 <= x < w and 0 <= y < h):
-                continue
-
-            # Ensure image exists on disk (save once per frame)
+            # Save image once per frame
             if not img_path.exists():
-                np.savez_compressed(img_path, data=data.astype(np.float32))
+                try:
+                    np.savez_compressed(img_path, data=data.astype(np.float32))
+                except Exception:
+                    continue
 
             # Load or create label
             label = load_label(lbl_path)
@@ -285,26 +311,64 @@ def main():
                     "objects": [],
                 }
 
-            obj = {
-                "ra_deg": ra_deg,
-                "dec_deg": dec_deg,
-                "x": float(x),
-                "y": float(y),
-                "mag": mag,
-            }
+            # Compute approximate RA/Dec bounds of this frame (corner-based)
+            try:
+                ra_min, ra_max, dec_min, dec_max = frame_radec_bounds(wcs, w, h)
+            except Exception:
+                continue
 
-            _ = add_object_to_label(label, obj)
-            save_label(lbl_path, label)
+            # Small margin in degrees to avoid edge numerical issues
+            margin = 0.05
+            ra_min -= margin
+            ra_max += margin
+            dec_min -= margin
+            dec_max += margin
+
+            # Candidate HYG stars potentially inside this frame
+            # Note: RA wrap-around near 0/360 not handled in this simple filter.
+            cands = star_df[
+                (star_df["dec_deg"] >= dec_min) & (star_df["dec_deg"] <= dec_max) &
+                (star_df["ra_deg"] >= ra_min) & (star_df["ra_deg"] <= ra_max)
+            ]
+
+            # Add all candidate stars that actually map inside pixel bounds
+            changed = False
+            for row in cands.itertuples(index=False):
+                sid = int(row.id)
+                if SKIP_SUN and sid == 0:
+                    continue
+
+                try:
+                    sx, sy = world_to_pixel(wcs, float(row.ra_deg), float(row.dec_deg))
+                except Exception:
+                    continue
+
+                if not (0 <= sx < w and 0 <= sy < h):
+                    continue
+
+                obj = {
+                    "star_id": sid,
+                    "ra_deg": float(row.ra_deg),
+                    "dec_deg": float(row.dec_deg),
+                    "x": float(sx),
+                    "y": float(sy),
+                    "mag": float(row.mag),
+                }
+
+                # add_object_to_label should skip duplicates by star_id
+                added = add_object_to_label(label, obj)
+                if added:
+                    changed = True
+
+            # Save label if anything was added/updated
+            if changed or (fid not in saved_frames):
+                save_label(lbl_path, label)
+
             saved_frames.add(fid)
-
-            # If you want to limit how many frames you store, check after additions
-            if MAX_SAVED_FRAMES is not None and len(saved_frames) >= MAX_SAVED_FRAMES:
-                break
 
     # Always write splits from what exists on disk
     write_splits_from_labels()
     print(f"Done. Unique frames with labels: {len({p.stem for p in LABELS_DIR.glob('*.json')})}")
-
 
 if __name__ == "__main__":
     main()

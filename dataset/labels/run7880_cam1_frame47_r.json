@@ -1,0 +1,19 @@
+{
+  "image_id": "run7880_cam1_frame47_r",
+  "source": "SDSS",
+  "band": "r",
+  "image_shape": [
+    1489,
+    2048
+  ],
+  "objects": [
+    {
+      "star_id": 186,
+      "ra_deg": 0.60069,
+      "dec_deg": 8.956824,
+      "x": 399.3373629913466,
+      "y": 281.2210254866003,
+      "mag": 6.33
+    }
+  ]
+}
