@@ -32,7 +32,7 @@ BAND = "r"
 SKIP_SUN = True
 
 # Stop conditions
-MAX_SAVED_FRAMES = 300   # set None for unlimited
+MAX_SAVED_FRAMES = 100   # set None for unlimited
 MAX_ATTEMPTS = 3000      # set None for unlimited
 
 # SDSS query controls

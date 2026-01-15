@@ -1,0 +1,17 @@
+run1739_cam1_frame304_r
+run2566_cam3_frame311_r
+run4135_cam3_frame285_r
+run4135_cam4_frame268_r
+run4135_cam4_frame283_r
+run4822_cam5_frame536_r
+run5064_cam2_frame152_r
+run5064_cam4_frame155_r
+run5656_cam6_frame19_r
+run7717_cam4_frame330_r
+run7778_cam2_frame319_r
+run7787_cam6_frame202_r
+run7880_cam3_frame48_r
+run7880_cam5_frame47_r
+run8096_cam6_frame231_r
+run8103_cam3_frame98_r
+run8156_cam4_frame236_r
