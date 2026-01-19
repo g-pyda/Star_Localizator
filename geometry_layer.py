@@ -14,7 +14,7 @@ IMAGE_PATH = "yolo_dataset/train/images/run4822_cam6_frame535_r.png"
 
 def get_common_name(source_id):
     """
-    Tries to get a common name of the star (eg. 'Betelgeuse') based on Gaia ID
+    Tries to get a common name of the star (e.g. 'Betelgeuse') based on Gaia ID
     """
     try:
         # SIMBAD takes the Gaia identifier
@@ -62,7 +62,7 @@ def identify_stars(image_path, model_path, catalog_json):
 
     # Taking out the centers of the boxes (x_center, y_center)
     detected_points = results.boxes.xywh.cpu().numpy()[:, :2]
-    print(f"Wykryto {len(detected_points)} gwiazd przez YOLO.")
+    print(f"{len(detected_points)} star points detected by YOLO.")
 
     # Loading the training data
     with open(catalog_json, 'r') as f:
