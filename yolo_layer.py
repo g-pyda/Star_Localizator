@@ -28,10 +28,10 @@ def train_star_detector():
     # Parametrization adjusted to small objects (stars)
     model.train(
         data=DATA_YAML_PATH,                    # Path to data.yaml file
-        epochs=100,                             # Number of epochs
+        epochs=300,                             # Number of epochs
         imgsz=1280,                             # Picture size - crucial for star resolution
-        batch=8,                                # Batch size (depends on VRAM possibilities)
-        patience=10,                            # Early stopping: stop if {patience} epochs give no improvement
+        batch=32,                               # Batch size (depends on VRAM possibilities)
+        patience=30,                            # Early stopping: stop if {patience} epochs give no improvement
         save=True,                              # Save the model weights (important!)
         device=device,                          # Use of detected device
         workers=8,                              # Number of threads to operate on
