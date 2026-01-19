@@ -10,7 +10,7 @@ import torch
 import numpy as np
 import cv2
 from ultralytics import YOLO
-from scipy.spatial import Delaunay
+from scipy.spatial import Delaunay, KDTree
 import pickle
 
 # --- CONFIGURATION ---
@@ -24,18 +24,19 @@ IMAGE_PATH = "yolo_dataset/train/images/run4822_cam6_frame535_r.png"
 
 
 def train_gnn_model(loader, num_classes, epochs=100, lr=0.001):
-    # 1. Sprawdzenie urządzenia
+    # Getting the device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Rozpoczynam trening GNN na: {device}")
+    print(f"Starting GNN training on: {device}")
 
-    # 2. Inicjalizacja modelu (zdefiniowanego w kroku 3.1)
-    # in_channels=2 (bo mamy x i y), hidden_channels=64, out_channels=num_classes
+    # Initialization
+    # in_channels=2 (xy), hidden_channels=64, out_channels=num_classes
     model = StarGAT(in_channels=2, hidden_channels=64, out_channels=num_classes).to(device)
 
-    # 3. Definicja Optymalizatora i Funkcji Straty
+    # Optimizer and loss function definition
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
     criterion = nn.CrossEntropyLoss()
 
+    # Training
     model.train()
     for epoch in range(1, epochs + 1):
         total_loss = 0
@@ -49,7 +50,7 @@ def train_gnn_model(loader, num_classes, epochs=100, lr=0.001):
             # Forward pass
             out = model(data.x, data.edge_index)
 
-            # Obliczanie straty (porównujemy przewidziane klasy z etykietami y)
+            # Loss count (comparison of predicted classes with y)
             loss = criterion(out, data.y)
 
             # Backward pass
@@ -58,34 +59,40 @@ def train_gnn_model(loader, num_classes, epochs=100, lr=0.001):
 
             total_loss += loss.item()
 
-            # Obliczanie celności (accuracy) w locie
+            # Accuracy count
             pred = out.argmax(dim=1)
             correct += (pred == data.y).sum().item()
             total_nodes += data.num_nodes
 
-        # Logowanie wyników
+        # Results logging
         avg_loss = total_loss / len(loader)
         acc = correct / total_nodes
 
         if epoch % 10 == 0 or epoch == 1:
-            print(f'Epoka: {epoch:03d}, Strata (Loss): {avg_loss:.4f}, Celność (Acc): {acc:.4f}')
+            print(f'Epoch: {epoch:03d}, Loss: {avg_loss:.4f}, Acc: {acc:.4f}')
 
-    # 4. Zapisywanie modelu
-    torch.save(model.state_dict(), 'star_gnn_best.pth')
-    print("Trening zakończony. Model zapisany jako star_gnn_best.pth")
+    # Saving
+    torch.save(model.state_dict(), PATH_GNN)
+    print(f"Training ended. Model saved at {PATH_GNN}")
     return model
 
 
-def create_training_data(json_dir, batch_size=32):
+def create_training_data(json_dir, train_dir, batch_size=32):
     """
-    Konwertuje pliki JSON na obiekty Data (PyTorch Geometric) i tworzy DataLoader.
+    Converts JSON files to Data objects (PyTorch Geometric) and creates DataLoader.
     """
     all_data_list = []
     all_source_ids = []
+    json_files = []
 
-    # 1. Zbieramy wszystkie JSON-y i unikalne Gaia IDs do Label Encodingu
-    json_files = [f for f in os.listdir(json_dir) if f.endswith('.json')]
-    print(f"Wczytywanie {len(json_files)} plików etykiet...")
+    # Fetching all training JSONs and unique Gaia IDs to Label Encoding
+    json_files_unfiltered = [f for f in os.listdir(json_dir) if f.endswith('.json')]
+    train_labels = [f.removesuffix(".txt") for f in os.listdir(train_dir) if f.endswith('.txt')]
+
+    for f in json_files_unfiltered:
+        if f.removesuffix(".json") in train_labels:
+            json_files.append(f)
+    print(f"Loading {len(json_files)} label files...")
 
     for j_file in json_files:
         with open(os.path.join(json_dir, j_file), 'r') as f:
@@ -93,18 +100,18 @@ def create_training_data(json_dir, batch_size=32):
             for obj in content['objects']:
                 all_source_ids.append(obj['source_id'])
 
-    # Label Encoder zamienia Gaia ID (np. 1941019...) na klasy (0, 1, 2...)
+    # Label Encoder changes Gaia ID (e.g. 1941019...) to classes (0, 1, 2...)
     le = LabelEncoder()
     le.fit(all_source_ids)
 
     with open('label_encoder.pkl', 'wb') as f:
         pickle.dump(le, f)
-    print("✅ Słownik nazw (LabelEncoder) został zapisany pomyślnie.")
+    print("LabelEncoder was saved successfully.")
 
     num_classes = len(le.classes_)
-    print(f"Zidentyfikowano {num_classes} unikalnych gwiazd (klas).")
+    print(f"{num_classes} unique stars (classes) identified.")
 
-    # 2. Budujemy grafy dla każdego zdjęcia
+    # Building graphs for each photo
     for j_file in json_files:
         with open(os.path.join(json_dir, j_file), 'r') as f:
             content = json.load(f)
@@ -112,29 +119,29 @@ def create_training_data(json_dir, batch_size=32):
         h, w = content['image_shape']
         objs = content['objects']
 
-        if len(objs) < 3: continue  # Potrzebujemy min. 3 punktów do triangulacji
+        if len(objs) < 3: continue  # We need min. 3 points for triangulation
 
-        # Wyciągamy x, y i normalizujemy do [0, 1]
+        # Taking xy and normalizing to [0, 1]
         coords = np.array([[o['x'] / w, o['y'] / h] for o in objs])
 
-        # Tworzymy krawędzie za pomocą triangulacji Delaunaya
+        # Creating edges with Delaunay triangulation
         tri = Delaunay(coords)
         edges = []
         for s in tri.simplices:
             edges.extend([[s[0], s[1]], [s[1], s[2]], [s[2], s[0]]])
 
-        # Konwersja na format PyTorcha
+        # PyTorch format conversion
         x = torch.tensor(coords, dtype=torch.float)
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
 
-        # Kodujemy etykiety (source_id -> int class)
+        # Label encoding (source_id -> int class)
         y = torch.tensor(le.transform([o['source_id'] for o in objs]), dtype=torch.long)
 
-        # Tworzymy obiekt grafu
+        # Graph object creation
         data = Data(x=x, edge_index=edge_index, y=y)
         all_data_list.append(data)
 
-    # 3. Tworzymy DataLoader
+    # DataLoader creation
     loader = DataLoader(all_data_list, batch_size=batch_size, shuffle=True)
 
     return loader, le, num_classes
@@ -144,49 +151,49 @@ class StarGAT(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, heads=8, dropout=0.3):
         super(StarGAT, self).__init__()
 
-        # Pierwsza warstwa GAT (Multi-head Attention)
-        # in_channels: 2 (x, y)
+        # First GAT layer (Multi-head Attention)
+        # in_channels: 2 (xy)
         self.conv1 = GATConv(in_channels, hidden_channels, heads=heads, dropout=dropout)
         self.bn1 = BatchNorm(hidden_channels * heads)
 
-        # Druga warstwa GAT (Hidden Layer)
-        # Wejście to hidden_channels * heads, ponieważ konkatenujemy wyniki z głów
+        # Second GAT layer (Hidden Layer)
+        # Entrance to hidden_channels * heads
         self.conv2 = GATConv(hidden_channels * heads, hidden_channels, heads=heads, dropout=dropout)
         self.bn2 = BatchNorm(hidden_channels * heads)
 
-        # Trzecia warstwa GAT (Output Layer)
-        # Dla klasyfikacji węzłów często ustawiamy concat=False w ostatniej warstwie
+        # Third GAT layer (Output Layer)
+        # concat=False in the last layer
         self.conv3 = GATConv(hidden_channels * heads, out_channels, heads=1, concat=False, dropout=dropout)
 
         self.dropout = dropout
 
     def forward(self, x, edge_index):
-        # Pierwszy blok: Konwolucja -> Batch Norm -> Aktywacja -> Dropout
+        # 1. Block: Convolution -> Batch Norm -> Activation -> Dropout
         x = self.conv1(x, edge_index)
         x = self.bn1(x)
-        x = F.elu(x)  # ELU jest standardem dla GAT
+        x = F.elu(x)  # ELU - standard for GAT
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Drugi blok
+        # 2. Block
         x = self.conv2(x, edge_index)
         x = self.bn2(x)
         x = F.elu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Trzecia warstwa (wyjściowa)
+        # 3. Block (out)
         x = self.conv3(x, edge_index)
 
-        # Zwracamy logity (użyjemy CrossEntropyLoss podczas treningu)
+        # Return of logity
         return x
 
 
 def build_star_graph(points, source_ids=None):
     """
-    Zamienia punkty (x, y) na graf. Krawędzie tworzone są za pomocą triangulacji Delaunaya.
+    Changes points (xy) to a graph. Edges are created with Delaunay triangulation.
     """
     coords = torch.tensor(points, dtype=torch.float)
 
-    # 1. Tworzenie krawędzi (Triangulacja Delaunaya łączy najbliższych sąsiadów)
+    # Edge creation (Delaunay triangulation connects the closest neighbors)
     tri = Delaunay(points)
     edges = []
     for simplex in tri.simplices:
@@ -194,11 +201,23 @@ def build_star_graph(points, source_ids=None):
 
     edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
 
-    # 2. Cechy węzłów (np. znormalizowane x, y lub jasność jeśli ją masz)
-    # W Big Data często dodaje się tu deskryptory lokalnej gęstości
-    node_features = coords
+    # Spatial Density Descriptors (using KDTree)
+    tree = KDTree(points)
 
-    # 3. Etykiety (source_id z katalogu Gaia - do treningu)
+    # Descriptor A: Local Count Density (number of stars within 50px radius)
+    density_counts = tree.query_ball_point(points, r=50.0, return_length=True)
+    density_counts = torch.tensor(density_counts, dtype=torch.float).view(-1, 1)
+
+    # Descriptor B: Average Distance to 5-nearest neighbors
+    # We use k=6 because the first result is always the point itself (distance 0)
+    dist, _ = tree.query(points, k=6)
+    avg_dist = torch.tensor(dist[:, 1:].mean(axis=1), dtype=torch.float).view(-1, 1)
+
+    # Node characteristics
+    # Combined features: [x, y, neighbor_count, mean_distance]
+    node_features = torch.cat([coords, density_counts, avg_dist], dim=-1)
+
+    # Labels (source_id from Gaia - for training)
     y = None
     if source_ids:
         y = torch.tensor(source_ids, dtype=torch.long)
@@ -209,7 +228,7 @@ def build_star_graph(points, source_ids=None):
 if __name__ == "__main__":
     # Preparing the data and the encoder
     # fit() on LabelEncoder and save in label_encoder.pkl
-    loader, le, num_stars = create_training_data("dataset/labels")
+    loader, le, num_stars = create_training_data("dataset/labels", "yolo_dataset/train/labels")
 
     # Training GNN model
     model_gnn = train_gnn_model(loader, num_stars)
