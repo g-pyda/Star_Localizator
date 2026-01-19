@@ -6,6 +6,14 @@ GOOGLE_DRIVE = False
 GOOGLE_PROJECT_ADRESS = ""
 YOLO_MODEL = "yolo11n.pt" # Choices: n - nano, s - small, m - medium
 DATA_YAML_PATH = "data.yaml"
+PROJECT_NAME = "star_detection_project"
+MODEL_TRAIN_NAME = "yolo11s_stars_v1"
+# --------------------- #
+
+if GOOGLE_DRIVE:
+    from google.colab import drive
+    drive.mount("/content/drive")
+    DATA_YAML_PATH = GOOGLE_PROJECT_ADRESS + DATA_YAML_PATH
 
 
 def train_star_detector():
@@ -27,8 +35,8 @@ def train_star_detector():
         save=True,                              # Save the model weights (important!)
         device=device,                          # Use of detected device
         workers=8,                              # Number of threads to operate on
-        project="star_detection_project",       # Project name (will create this directory)
-        name="yolo11s_stars_v1",                # Name of the experiment
+        project=PROJECT_NAME,                   # Project name (will create this directory)
+        name=MODEL_TRAIN_NAME,                  # Name of the experiment
         exist_ok=True,
         # Augmentations
         mosaic=0.5,                             # To not shred the constellations
