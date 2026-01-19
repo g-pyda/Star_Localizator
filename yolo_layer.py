@@ -1,45 +1,42 @@
 from ultralytics import YOLO
 import torch
 
+# --- CONFIGURATION --- #
+GOOGLE_DRIVE = False
+GOOGLE_PROJECT_ADRESS = ""
+YOLO_MODEL = "yolo11n.pt" # Choices: n - nano, s - small, m - medium
+DATA_YAML_PATH = "data.yaml"
+
+
 def train_star_detector():
-    # 1. Sprawdzenie dostępności GPU
+    # Checking the GPU availability
     device = 0 if torch.cuda.is_available() else 'cpu'
-    print(f"Używam urządzenia: {device}")
+    print(f"Used evice: {device}")
 
-    # 2. Wybór modelu bazowego
-    # YOLO11n (nano) - najszybszy, dobry do testów
-    # YOLO11s (small) - nieco lepsza dokładność, nadal szybki
-    model = YOLO("yolo11n.pt")
+    # Choice of the base model
+    model = YOLO(YOLO_MODEL)
 
-    # 3. Rozpoczęcie treningu
-    # Parametry dostosowane do małych obiektów (gwiazd)
+    # Training
+    # Parametrization adjusted to small objects (stars)
     model.train(
-        data="data.yaml",                    # Ścieżka do Twojego pliku yaml
-        epochs=100,                          # Liczba epok (przy 10k zdjęć 50-100 wystarczy)
-        imgsz=1280,                          # Rozmiar obrazu - kluczowy dla małych gwiazd!
-        batch=8,                             # Rozmiar paczki (zmniejsz do 8 lub 4, jeśli braknie VRAM)
-        patience=10,                         # Early stopping: przerwij, jeśli brak poprawy przez 10 epok
-        save=True,                           # Zapisuj wagi modelu
-        device=device,                       # Użycie GPU lub CPU
-        workers=8,                           # Liczba wątków do ładowania danych
-        project="star_detection_project",    # Nazwa folderu projektu
-        name="yolo11s_stars_v1",             # Nazwa konkretnego eksperymentu
+        data=DATA_YAML_PATH,                    # Path to data.yaml file
+        epochs=100,                             # Number of epochs
+        imgsz=1280,                             # Picture size - crucial for star resolution
+        batch=8,                                # Batch size (depends on VRAM possibilities)
+        patience=10,                            # Early stopping: stop if {patience} epochs give no improvement
+        save=True,                              # Save the model weights (important!)
+        device=device,                          # Use of detected device
+        workers=8,                              # Number of threads to operate on
+        project="star_detection_project",       # Project name (will create this directory)
+        name="yolo11s_stars_v1",                # Name of the experiment
         exist_ok=True,
-        # Augmentacje
-        mosaic=0.5,                          # Zmniejszamy mosaic, by nie "rozrywać" konstelacji za bardzo
-        mixup=0.1                            # Może pomóc przy gęstych polach gwiazd
+        # Augmentations
+        mosaic=0.5,                             # To not shred the constellations
+        mixup=0.1                               # Helpful in dense star regions
     )
 
-    print("Trening zakończony!")
+    print("Training finished!")
 
 if __name__ == "__main__":
     train_star_detector()
-    # # Podaj ścieżkę do Twojego najlepszego modelu
-    # # Zazwyczaj jest to: runs/detect/star_detection_v1/weights/best.pt
-    # model = YOLO("star_detection_project/yolo11s_stars_v1/weights/best.pt")
-    #
-    # # Uruchom detekcję
-    # results = model.predict(source="yolo_dataset/train/images/run4152_cam6_frame66_r.png", imgsz=1280, conf=0.02)
-    #
-    # # Pokaż wyniki
-    # results[0].show()
+
