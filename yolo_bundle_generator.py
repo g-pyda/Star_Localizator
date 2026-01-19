@@ -5,89 +5,86 @@ import json
 import yaml
 from sklearn.model_selection import train_test_split
 
-# --- KONFIGURACJA ŚCIEŻEK WEJŚCIOWYCH ---
-BASE_PATH = "dataset"  # Główny folder Twojego projektu
-INPUT_IMAGES = f"{BASE_PATH}/images"  # Tu masz pliki .npz
-INPUT_LABELS = f"{BASE_PATH}/labels"  # Tu masz pliki .json
+# --- CONFIGURATION - INPUT ---- #
+BASE_PATH = "dataset"                   # base path for unprocessed dataset
+INPUT_IMAGES = f"{BASE_PATH}/images"    # path to .npz files
+INPUT_LABELS = f"{BASE_PATH}/labels"    # path to .json files
 
-# --- KONFIGURACJA WYJŚCIOWA ---
-OUTPUT_DIR = "yolo_dataset"
-STAR_BOX_SIZE = 8  # Rozmiar ramki wokół gwiazdy w pikselach (dla YOLO)
+# --- CONFIGURATION - OUTPUT --- #
+OUTPUT_DIR = "yolo_dataset"             # output directory
+STAR_BOX_SIZE = 16                       # box size of a star (for YOLO)
+
+# helper function - converting the files from specific split
+def process_split(files, split_name):
+    print(f"Processing the set {split_name} ({len(files)} files)...")
+
+    for json_name in files:
+        # Reading the JSON
+        with open(os.path.join(INPUT_LABELS, json_name), 'r') as f:
+            data = json.load(f)
+
+        img_id = data['image_id']
+        h_orig, w_orig = data['image_shape']  # SDSS shape [H, W]
+
+        # Localization of .npz file based on image_id
+        npz_path = os.path.join(INPUT_IMAGES, f"{img_id}.npz")
+
+        if not os.path.exists(npz_path):
+            print(f"Ostrzeżenie: Brak pliku {npz_path} dla labelki {json_name}")
+            continue
+
+        # Reading and preprocession of the photo
+        npz_data = np.load(npz_path)
+        key = list(npz_data.keys())[0]
+        img_array = npz_data[key]
+
+        # Normalization to uint8 (0-255)
+        img_array = cv2.normalize(img_array, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+        # Conversion to RGB (3 channels)
+        if len(img_array.shape) == 2:
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+
+        # Save of the picture in PNG
+        cv2.imwrite(f"{OUTPUT_DIR}/{split_name}/images/{img_id}.png", img_array)
+
+        # Creating YOLO .txt etiquette
+        label_path = f"{OUTPUT_DIR}/{split_name}/labels/{img_id}.txt"
+        with open(label_path, 'w') as f_out:
+            for obj in data['objects']:
+                # Fetching x, y from JSON
+                x_px = obj['x']
+                y_px = obj['y']
+
+                # Coordinates normalization (0.0 - 1.0)
+                x_center = x_px / w_orig
+                y_center = y_px / h_orig
+                width = STAR_BOX_SIZE / w_orig
+                height = STAR_BOX_SIZE / h_orig
+
+                # File writing: class=0, x, y, w, h
+                f_out.write(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
 
 
 def prepare_yolo_dataset():
-    # 1. Tworzenie struktury folderów YOLO
+    # Creating the structure of YOLO-compatible dataset
     for split in ['train', 'val']:
         os.makedirs(f"{OUTPUT_DIR}/{split}/images", exist_ok=True)
         os.makedirs(f"{OUTPUT_DIR}/{split}/labels", exist_ok=True)
 
-    # 2. Pobranie listy wszystkich plików JSON
+    # Download of all JSON files and split on training and validation files
     json_files = [f for f in os.listdir(INPUT_LABELS) if f.endswith('.json')]
 
     if not json_files:
-        print("Błąd: Nie znaleziono plików JSON w folderze labels!")
+        print("[ERROR] No .json files found in input folder")
         return
-
-    # Podział na trening i walidację (80/20)
     train_jsons, val_jsons = train_test_split(json_files, test_size=0.2, random_state=42)
 
-    def process_split(files, split_name):
-        print(f"Przetwarzanie zbioru {split_name} ({len(files)} plików)...")
-
-        for json_name in files:
-            # Wczytanie JSON-a
-            with open(os.path.join(INPUT_LABELS, json_name), 'r') as f:
-                data = json.load(f)
-
-            img_id = data['image_id']
-            h_orig, w_orig = data['image_shape']  # SDSS shape [H, W]
-
-            # Lokalizacja pliku .npz na podstawie image_id z JSONa
-            npz_path = os.path.join(INPUT_IMAGES, f"{img_id}.npz")
-
-            if not os.path.exists(npz_path):
-                print(f"Ostrzeżenie: Brak pliku {npz_path} dla labelki {json_name}")
-                continue
-
-            # Wczytanie i przygotowanie obrazu
-            npz_data = np.load(npz_path)
-            # Wyciągamy tablicę (zazwyczaj pod 'arr_0' lub kluczem pasującym do band r/g/i)
-            # Jeśli nie wiesz jaki jest klucz, bierzemy pierwszy dostępny
-            key = list(npz_data.keys())[0]
-            img_array = npz_data[key]
-
-            # Normalizacja do uint8 (0-255)
-            img_array = cv2.normalize(img_array, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-            # Konwersja do RGB (3 kanały)
-            if len(img_array.shape) == 2:
-                img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
-
-            # Zapis obrazu jako PNG
-            cv2.imwrite(f"{OUTPUT_DIR}/{split_name}/images/{img_id}.png", img_array)
-
-            # Tworzenie etykiet YOLO .txt
-            label_path = f"{OUTPUT_DIR}/{split_name}/labels/{img_id}.txt"
-            with open(label_path, 'w') as f_out:
-                for obj in data['objects']:
-                    # Wyciągamy x, y z JSONa
-                    x_px = obj['x']
-                    y_px = obj['y']
-
-                    # Normalizacja współrzędnych (0.0 - 1.0)
-                    x_center = x_px / w_orig
-                    y_center = y_px / h_orig
-                    width = STAR_BOX_SIZE / w_orig
-                    height = STAR_BOX_SIZE / h_orig
-
-                    # Zapis: klasa=0, x, y, w, h
-                    f_out.write(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
-
-    # Uruchomienie procesowania
+    # Processing the split parts
     process_split(train_jsons, 'train')
     process_split(val_jsons, 'val')
 
-    # 3. Tworzenie pliku data.yaml
+    # Creating the YAML file
     yaml_data = {
         'path': os.path.abspath(OUTPUT_DIR),
         'train': 'train/images',
@@ -98,7 +95,7 @@ def prepare_yolo_dataset():
     with open(f"{OUTPUT_DIR}/data.yaml", 'w') as f_yaml:
         yaml.dump(yaml_data, f_yaml, default_flow_style=False)
 
-    print(f"\nSukces! Dane gotowe w folderze: {OUTPUT_DIR}")
+    print(f"\nSuccess! Data saved in: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
